@@ -127,6 +127,5 @@ def gerar_log(sucessos, erros, ignorados):
     return "".join(log)
 
 
-# obrigatório para Vercel
-def handler(request, *args, **kwargs):
-    return app(request.environ, lambda *a, **k: None)
+from vercel import VercelHandler
+handler = VercelHandler(app)
