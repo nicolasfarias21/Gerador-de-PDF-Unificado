@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Unificador de PDFs</title>
-
     <style>
         body {
             margin: 0;
@@ -50,14 +49,8 @@
             transition: 0.3s;
         }
 
-        button:hover {
-            background-color: #1e3c72;
-            transform: translateY(-2px);
-        }
-
-        button:active {
-            transform: scale(0.98);
-        }
+        button:hover { background-color: #1e3c72; transform: translateY(-2px); }
+        button:active { transform: scale(0.98); }
 
         .loading {
             margin-top: 15px;
@@ -68,7 +61,6 @@
     </style>
 </head>
 <body>
-
     <div class="container">
         <h2>Unificador de PDFs</h2>
         <p>Selecione uma pasta contendo PDFs para unificar por subpasta.</p>
@@ -76,10 +68,7 @@
         <input type="file" id="files" webkitdirectory multiple>
         <br>
         <button onclick="enviar()">Processar</button>
-
-        <div class="loading" id="loading">
-            Processando arquivos... aguarde ⏳
-        </div>
+        <div class="loading" id="loading">Processando arquivos... aguarde ⏳</div>
     </div>
 
     <script>
@@ -93,17 +82,22 @@
             }
 
             const formData = new FormData();
-
             for (let file of input.files) {
                 formData.append("files", file, file.webkitRelativePath);
             }
 
             loading.style.display = "block";
 
-            const response = await fetch("/", {
+            const response = await fetch("/api/index", {
                 method: "POST",
                 body: formData
             });
+
+            if (!response.ok) {
+                alert("Erro ao processar arquivos!");
+                loading.style.display = "none";
+                return;
+            }
 
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
@@ -116,6 +110,5 @@
             loading.style.display = "none";
         }
     </script>
-
 </body>
 </html>

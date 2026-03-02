@@ -1,99 +1,114 @@
 import zipfile
 from io import BytesIO
 from datetime import datetime
-from flask import Flask, render_template, request, send_file
 from pypdf import PdfReader, PdfWriter
 
-app = Flask(__name__, template_folder="../templates")
+LIMITE_MB = 90
+LIMITE_BYTES = LIMITE_MB * 1024 * 1024
 
+def handler(request, context):
+    try:
+        files = request.files.getlist("files")
+    except Exception:
+        return {"status": 400, "body": "Nenhum arquivo enviado"}
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        arquivos = request.files.getlist("files")
+    pdfs_por_pasta = {}
+    sucessos, erros, ignorados = [], [], []
 
-        pdfs_por_pasta = {}
-        sucessos = []
-        erros = []
-        ignorados = []
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            continue
 
-        for file in arquivos:
-            if not file.filename.lower().endswith(".pdf"):
+        caminho_relativo = file.filename.replace("\\", "/")
+        partes = caminho_relativo.split("/")
+        nome_pasta = partes[0] if len(partes) > 1 else "arquivos"
+
+        if nome_pasta not in pdfs_por_pasta:
+            pdfs_por_pasta[nome_pasta] = []
+
+        try:
+            conteudo = file.read()
+            if not conteudo:
+                ignorados.append(f"{caminho_relativo} (vazio)")
                 continue
 
-            caminho_relativo = file.filename.replace("\\", "/")
-            partes = caminho_relativo.split("/")
-
-            # Se não vier pasta, agrupa tudo em "arquivos"
-            nome_pasta = partes[0] if len(partes) > 1 else "arquivos"
-
-            if nome_pasta not in pdfs_por_pasta:
-                pdfs_por_pasta[nome_pasta] = []
+            pdf_bytesio = BytesIO(conteudo)
+            pdf_bytesio.seek(0)
 
             try:
-                conteudo = file.read()
-                if not conteudo:
-                    ignorados.append(f"{caminho_relativo} (vazio)")
-                    continue
-
-                pdf_bytesio = BytesIO(conteudo)
-                pdf_bytesio.seek(0)
-
-                try:
-                    # strict=False ignora cabeçalhos problemáticos e pequenos erros de PDF
-                    reader = PdfReader(pdf_bytesio, strict=False)
-                except Exception as e:
-                    ignorados.append(f"{caminho_relativo} (corrompido ou inválido: {e})")
-                    continue
-
-                if len(reader.pages) == 0:
-                    ignorados.append(f"{caminho_relativo} (sem páginas)")
-                    continue
-
-                pdfs_por_pasta[nome_pasta].append(reader)
-                sucessos.append(caminho_relativo)
-
+                reader = PdfReader(pdf_bytesio, strict=False)
             except Exception as e:
-                erros.append(f"{caminho_relativo} -> {str(e)}")
+                ignorados.append(f"{caminho_relativo} (corrompido: {e})")
+                continue
 
-        zip_buffer = BytesIO()
+            if len(reader.pages) == 0:
+                ignorados.append(f"{caminho_relativo} (sem páginas)")
+                continue
 
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for pasta, readers in pdfs_por_pasta.items():
-                if not readers:
-                    continue
+            pdfs_por_pasta[nome_pasta].append(reader)
+            sucessos.append(caminho_relativo)
 
-                writer = PdfWriter()
+        except Exception as e:
+            erros.append(f"{caminho_relativo} -> {str(e)}")
 
-                for reader in readers:
-                    for page in reader.pages:
-                        writer.add_page(page)
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for pasta, readers in pdfs_por_pasta.items():
+            if not readers:
+                continue
 
-                pdf_bytes = BytesIO()
-                writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
+            todas_paginas = []
+            for reader in readers:
+                todas_paginas.extend(reader.pages)
 
-                zipf.writestr(f"{pasta}.pdf", pdf_bytes.read())
+            writer = PdfWriter()
+            parte = 1
 
-            # adiciona log sempre
-            log_conteudo = gerar_log(sucessos, erros, ignorados)
-            zipf.writestr("log_processamento.txt", log_conteudo)
+            for page in todas_paginas:
+                writer.add_page(page)
+                temp_buffer = BytesIO()
+                writer.write(temp_buffer)
 
-        zip_buffer.seek(0)
+                if temp_buffer.tell() > LIMITE_BYTES:
+                    # Remove última página adicionada
+                    writer.pages.pop()
+                    final_buffer = BytesIO()
+                    writer.write(final_buffer)
+                    final_buffer.seek(0)
 
-        return send_file(
-            zip_buffer,
-            as_attachment=True,
-            download_name="resultado.zip",
-            mimetype="application/zip"
-        )
+                    nome_arquivo = f"{pasta}.pdf" if parte == 1 else f"{pasta}_pt{parte}.pdf"
+                    zipf.writestr(nome_arquivo, final_buffer.read())
 
-    return render_template("index.html")
+                    parte += 1
+                    writer = PdfWriter()
+                    writer.add_page(page)
+
+            # Salva restante
+            if len(writer.pages) > 0:
+                final_buffer = BytesIO()
+                writer.write(final_buffer)
+                final_buffer.seek(0)
+
+                nome_arquivo = f"{pasta}.pdf" if parte == 1 else f"{pasta}_pt{parte}.pdf"
+                zipf.writestr(nome_arquivo, final_buffer.read())
+
+        # Log sempre
+        log_conteudo = gerar_log(sucessos, erros, ignorados)
+        zipf.writestr("log_processamento.txt", log_conteudo)
+
+    zip_buffer.seek(0)
+    return {
+        "status": 200,
+        "headers": {
+            "Content-Type": "application/zip",
+            "Content-Disposition": "attachment; filename=resultado.zip"
+        },
+        "body": zip_buffer.getvalue()
+    }
 
 
 def gerar_log(sucessos, erros, ignorados):
-    log = []
-    log.append("===== RESUMO DO PROCESSAMENTO =====\n")
+    log = ["===== RESUMO DO PROCESSAMENTO =====\n"]
     log.append(f"Data/Hora: {datetime.now()}\n\n")
     log.append(f"Total com sucesso: {len(sucessos)}\n")
     log.append(f"Total com erro: {len(erros)}\n")
@@ -101,31 +116,16 @@ def gerar_log(sucessos, erros, ignorados):
 
     if erros:
         log.append("Arquivos com erro:\n")
-        for e in erros:
-            log.append(f"- {e}\n")
+        log.extend([f"- {e}\n" for e in erros])
         log.append("\n")
 
     log.append("===== DETALHAMENTO =====\n\n")
-
     if sucessos:
         log.append("Processados com sucesso:\n")
-        for s in sucessos:
-            log.append(f"- {s}\n")
+        log.extend([f"- {s}\n" for s in sucessos])
         log.append("\n")
-
     if ignorados:
         log.append("Arquivos ignorados:\n")
-        for i in ignorados:
-            log.append(f"- {i}\n")
+        log.extend([f"- {i}\n" for i in ignorados])
         log.append("\n")
-
-    if erros:
-        log.append("Erros detalhados:\n")
-        for e in erros:
-            log.append(f"- {e}\n")
-
     return "".join(log)
-
-
-from vercel import VercelHandler
-handler = VercelHandler(app)
