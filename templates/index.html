@@ -1,114 +1,80 @@
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-    <meta charset="UTF-8">
-    <title>Unificador de PDFs</title>
-    <style>
-        body {
-            margin: 0;
-            font-family: Arial, Helvetica, sans-serif;
-            background: linear-gradient(135deg, #1e3c72, #2a5298);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-        }
-
-        .container {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-            text-align: center;
-            width: 400px;
-        }
-
-        h2 {
-            margin-bottom: 10px;
-            color: #2a5298;
-        }
-
-        p {
-            font-size: 14px;
-            color: #555;
-            margin-bottom: 30px;
-        }
-
-        input[type="file"] {
-            margin-bottom: 20px;
-        }
-
-        button {
-            background-color: #2a5298;
-            color: white;
-            border: none;
-            padding: 12px 25px;
-            font-size: 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: 0.3s;
-        }
-
-        button:hover { background-color: #1e3c72; transform: translateY(-2px); }
-        button:active { transform: scale(0.98); }
-
-        .loading {
-            margin-top: 15px;
-            font-size: 14px;
-            color: #2a5298;
-            display: none;
-        }
-    </style>
+<meta charset="UTF-8">
+<title>Unificador de PDFs</title>
+<style>
+body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background: linear-gradient(135deg, #1e3c72, #2a5298);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+.container {
+    background: white;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    text-align: center;
+    width: 400px;
+}
+h2 { margin-bottom: 10px; color: #2a5298; }
+p { font-size: 14px; color: #555; margin-bottom: 30px; }
+input[type="file"] { margin-bottom: 20px; }
+button {
+    background-color: #2a5298;
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    font-size: 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: 0.3s;
+}
+button:hover { background-color: #1e3c72; transform: translateY(-2px); }
+button:active { transform: scale(0.98); }
+.loading { margin-top: 15px; font-size: 14px; color: #2a5298; display: none; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h2>Unificador de PDFs</h2>
-        <p>Selecione uma pasta contendo PDFs para unificar por subpasta.</p>
+<div class="container">
+<h2>Unificador de PDFs</h2>
+<p>Selecione uma pasta contendo PDFs para unificar por subpasta.</p>
+<input type="file" id="files" webkitdirectory multiple><br>
+<button onclick="enviar()">Processar</button>
+<div class="loading" id="loading">Processando arquivos... aguarde ⏳</div>
+</div>
 
-        <input type="file" id="files" webkitdirectory multiple>
-        <br>
-        <button onclick="enviar()">Processar</button>
-        <div class="loading" id="loading">Processando arquivos... aguarde ⏳</div>
-    </div>
+<script>
+async function enviar() {
+    const input = document.getElementById("files");
+    const loading = document.getElementById("loading");
+    if (input.files.length === 0) { alert("Selecione uma pasta primeiro."); return; }
 
-    <script>
-        async function enviar() {
-            const input = document.getElementById("files");
-            const loading = document.getElementById("loading");
+    const formData = new FormData();
+    for (let file of input.files) {
+        formData.append("files", file, file.webkitRelativePath);
+    }
 
-            if (input.files.length === 0) {
-                alert("Selecione uma pasta primeiro.");
-                return;
-            }
+    loading.style.display = "block";
 
-            const formData = new FormData();
-            for (let file of input.files) {
-                formData.append("files", file, file.webkitRelativePath);
-            }
+    const response = await fetch("/api/index", {
+        method: "POST",
+        body: formData
+    });
 
-            loading.style.display = "block";
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "resultado.zip";
+    a.click();
 
-            const response = await fetch("/api/index", {
-                method: "POST",
-                body: formData
-            });
-
-            if (!response.ok) {
-                alert("Erro ao processar arquivos!");
-                loading.style.display = "none";
-                return;
-            }
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "resultado.zip";
-            a.click();
-
-            loading.style.display = "none";
-        }
-    </script>
+    loading.style.display = "none";
+}
+</script>
 </body>
 </html>
