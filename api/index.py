@@ -1,141 +1,92 @@
+# api/index.py
 import zipfile
 from io import BytesIO
 from datetime import datetime
 from pypdf import PdfReader, PdfWriter
+import base64
 
 LIMITE_MB = 90
 LIMITE_BYTES = LIMITE_MB * 1024 * 1024
 
 def gerar_log(sucessos, erros, ignorados):
-    log = []
-    log.append("===== RESUMO DO PROCESSAMENTO =====\n")
-    log.append(f"Data/Hora: {datetime.now()}\n\n")
-    log.append(f"Total com sucesso: {len(sucessos)}\n")
-    log.append(f"Total com erro: {len(erros)}\n")
-    log.append(f"Total ignorados: {len(ignorados)}\n\n")
-
-    if erros:
-        log.append("Arquivos com erro:\n")
-        for e in erros:
-            log.append(f"- {e}\n")
-        log.append("\n")
-
-    log.append("===== DETALHAMENTO =====\n\n")
-
-    if sucessos:
-        log.append("Processados com sucesso:\n")
-        for s in sucessos:
-            log.append(f"- {s}\n")
-        log.append("\n")
-
-    if ignorados:
-        log.append("Arquivos ignorados:\n")
-        for i in ignorados:
-            log.append(f"- {i}\n")
-        log.append("\n")
-
+    log = ["===== LOG =====\n"]
+    log.append(f"Sucesso: {len(sucessos)}\n")
+    log.append(f"Erros: {len(erros)}\n")
+    log.append(f"Ignorados: {len(ignorados)}\n")
     return "".join(log)
 
-
 def handler(request):
-    if request.method == "POST":
-        arquivos = request.files.getlist("files")
+    # GET retorna página HTML
+    if request.method == "GET":
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Unificador PDFs</title></head>
+        <body>
+        <h2>Upload de PDFs</h2>
+        <form method="post" enctype="multipart/form-data">
+        <input type="file" name="files" multiple webkitdirectory><br>
+        <button>Processar</button>
+        </form>
+        </body>
+        </html>
+        """
+        return {"statusCode":200, "headers":{"Content-Type":"text/html"}, "body":html}
 
-        pdfs_por_pasta = {}
-        sucessos = []
-        erros = []
-        ignorados = []
+    # POST processa arquivos
+    arquivos = request.files.getlist("files")
+    pdfs_por_pasta = {}
+    sucessos, erros, ignorados = [], [], []
 
-        for file in arquivos:
-            if not file.filename.lower().endswith(".pdf"):
+    for file in arquivos:
+        if not file.filename.lower().endswith(".pdf"):
+            continue
+        nome_pasta = file.filename.split("/")[0] if "/" in file.filename else "arquivos"
+        pdfs_por_pasta.setdefault(nome_pasta, [])
+        try:
+            conteudo = file.read()
+            if not conteudo:
+                ignorados.append(file.filename)
                 continue
+            reader = PdfReader(BytesIO(conteudo), strict=False)
+            if len(reader.pages) == 0:
+                ignorados.append(file.filename)
+                continue
+            pdfs_por_pasta[nome_pasta].append(reader)
+            sucessos.append(file.filename)
+        except Exception as e:
+            erros.append(f"{file.filename} -> {e}")
 
-            caminho_relativo = file.filename.replace("\\", "/")
-            partes = caminho_relativo.split("/")
-
-            nome_pasta = partes[0] if len(partes) > 1 else "arquivos"
-
-            if nome_pasta not in pdfs_por_pasta:
-                pdfs_por_pasta[nome_pasta] = []
-
-            try:
-                conteudo = file.read()
-                if not conteudo:
-                    ignorados.append(f"{caminho_relativo} (vazio)")
-                    continue
-
-                pdf_bytesio = BytesIO(conteudo)
-                pdf_bytesio.seek(0)
-
-                try:
-                    reader = PdfReader(pdf_bytesio, strict=False)
-                except Exception as e:
-                    ignorados.append(f"{caminho_relativo} (corrompido ou inválido: {e})")
-                    continue
-
-                if len(reader.pages) == 0:
-                    ignorados.append(f"{caminho_relativo} (sem páginas)")
-                    continue
-
-                pdfs_por_pasta[nome_pasta].append(reader)
-                sucessos.append(caminho_relativo)
-
-            except Exception as e:
-                erros.append(f"{caminho_relativo} -> {str(e)}")
-
-        zip_buffer = BytesIO()
-
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for pasta, readers in pdfs_por_pasta.items():
-                if not readers:
-                    continue
-
-                # Junta todas as páginas
-                todas_paginas = []
-                for reader in readers:
-                    todas_paginas.extend(reader.pages)
-
-                parte = 1
-                writer = PdfWriter()
-                for page in todas_paginas:
-                    writer.add_page(page)
-                    temp_buffer = BytesIO()
-                    writer.write(temp_buffer)
-
-                    if temp_buffer.tell() >= LIMITE_BYTES:
-                        temp_buffer.seek(0)
-                        nome_arquivo = f"{pasta}.pdf" if parte == 1 else f"{pasta}_pt{parte}.pdf"
-                        zipf.writestr(nome_arquivo, temp_buffer.read())
-                        parte += 1
-                        writer = PdfWriter()  # reinicia
-
-                # Salva restante
-                if len(writer.pages) > 0:
-                    temp_buffer = BytesIO()
-                    writer.write(temp_buffer)
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for pasta, readers in pdfs_por_pasta.items():
+            todas_paginas = [p for r in readers for p in r.pages]
+            parte = 1
+            writer = PdfWriter()
+            for page in todas_paginas:
+                writer.add_page(page)
+                temp_buffer = BytesIO()
+                writer.write(temp_buffer)
+                if temp_buffer.tell() >= LIMITE_BYTES:
                     temp_buffer.seek(0)
-                    nome_arquivo = f"{pasta}.pdf" if parte == 1 else f"{pasta}_pt{parte}.pdf"
-                    zipf.writestr(nome_arquivo, temp_buffer.read())
+                    zipf.writestr(f"{pasta}.pdf" if parte==1 else f"{pasta}_pt{parte}.pdf", temp_buffer.read())
+                    parte += 1
+                    writer = PdfWriter()
+            if writer.pages:
+                temp_buffer = BytesIO()
+                writer.write(temp_buffer)
+                temp_buffer.seek(0)
+                zipf.writestr(f"{pasta}.pdf" if parte==1 else f"{pasta}_pt{parte}.pdf", temp_buffer.read())
 
-            # Log sempre
-            log_conteudo = gerar_log(sucessos, erros, ignorados)
-            zipf.writestr("log_processamento.txt", log_conteudo)
+        zipf.writestr("log.txt", gerar_log(sucessos, erros, ignorados))
 
-        zip_buffer.seek(0)
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/zip",
-                "Content-Disposition": "attachment; filename=resultado.zip"
-            },
-            "body": zip_buffer.getvalue(),
-            "isBase64Encoded": True
-        }
-
-    # GET — retorna HTML
-    html = open("index.html", "r", encoding="utf-8").read()
+    zip_buffer.seek(0)
     return {
         "statusCode": 200,
-        "headers": {"Content-Type": "text/html"},
-        "body": html
+        "headers": {
+            "Content-Type": "application/zip",
+            "Content-Disposition": "attachment; filename=resultado.zip"
+        },
+        "body": base64.b64encode(zip_buffer.read()).decode(),
+        "isBase64Encoded": True
     }
